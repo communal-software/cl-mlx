@@ -1,0 +1,178 @@
+#include <mlx/c/mlx.h>
+#include <cstdio>
+#include <cfenv>
+#include <atomic>
+#include <cstring>
+#include <mutex>
+#include <vector>
+
+static thread_local char last_error[4096];
+static std::atomic<size_t> live_arrays{0};
+static void capture_error(const char* message, void*) {
+  std::snprintf(last_error, sizeof(last_error), "%s", message);
+}
+static std::once_flag initialized;
+static void begin() {
+  std::call_once(initialized, [] { mlx_set_error_handler(capture_error, nullptr, nullptr); });
+  last_error[0] = 0;
+}
+struct native_guard {
+  fenv_t environment;
+  native_guard() { feholdexcept(&environment); begin(); }
+  ~native_guard() { fesetenv(&environment); }
+};
+static mlx_array a(void* p) { return {p}; }
+static mlx_optional_int oi(int x) { return {x, true}; }
+static mlx_optional_float of(float x) { return {x, true}; }
+static void* finish(int status, mlx_array result) {
+  if (status || last_error[0]) {
+    char saved[4096];
+    std::memcpy(saved, last_error, sizeof(saved));
+    mlx_array_free(result);
+    std::memcpy(last_error, saved, sizeof(saved));
+    return nullptr;
+  }
+  if (result.ctx) ++live_arrays;
+  return result.ctx;
+}
+struct stream_owner {
+  mlx_stream stream;
+  explicit stream_owner(mlx_device_type type) {
+    auto dev = mlx_device_new_type(type, 0);
+    stream = mlx_stream_new_device(dev);
+    mlx_device_free(dev);
+  }
+  ~stream_owner() { mlx_stream_free(stream); }
+};
+static thread_local int active_device = 1;
+static mlx_stream s() {
+  if (active_device == 0) {
+    static thread_local stream_owner owner(MLX_CPU);
+    return owner.stream;
+  }
+  static thread_local stream_owner owner(MLX_GPU);
+  return owner.stream;
+}
+
+extern "C" {
+const char* clmlx_error() { return last_error; }
+size_t clmlx_live_arrays() { return live_arrays.load(); }
+int clmlx_device() { return active_device; }
+void clmlx_set_device(int device) { active_device = device; }
+int clmlx_synchronize() { native_guard guard; return mlx_synchronize(s()); }
+int clmlx_initialize(const char* metallib) {
+  native_guard guard;
+  return mlx_metal_set_metallib_path(metallib);
+}
+int clmlx_available() {
+  native_guard guard; bool available = false;
+  return mlx_metal_is_available(&available) == 0 && available;
+}
+void* clmlx_from_data(const void* data, const int* shape, int rank, int dtype) {
+  native_guard guard; auto result = mlx_array_new_data(data, shape, rank, static_cast<mlx_dtype>(dtype));
+  return finish(0, result);
+}
+int clmlx_free(void* p) {
+  native_guard guard;
+  int status = mlx_array_free(a(p));
+  if (status == 0 && p) --live_arrays;
+  return status;
+}
+int clmlx_rank(void* p) { native_guard guard; return mlx_array_ndim(a(p)); }
+int clmlx_dim(void* p, int axis) { native_guard guard; return mlx_array_dim(a(p), axis); }
+int clmlx_dtype(void* p) { native_guard guard; return mlx_array_dtype(a(p)); }
+size_t clmlx_size(void* p) { native_guard guard; return mlx_array_size(a(p)); }
+const float* clmlx_data_f32(void* p) {
+  native_guard guard;
+  auto array = a(p);
+  auto rank = mlx_array_ndim(array);
+  auto shape = mlx_array_shape(array);
+  auto strides = mlx_array_strides(array);
+  size_t expected = 1;
+  for (int axis = static_cast<int>(rank) - 1; axis >= 0; --axis) {
+    if (shape[axis] > 1 && strides[axis] != expected) {
+      capture_error("Host transfer requires a row-contiguous array", nullptr);
+      return nullptr;
+    }
+    expected *= shape[axis];
+  }
+  return mlx_array_data_float32(array);
+}
+int clmlx_eval(void* const* pointers, int count) {
+  native_guard guard; std::vector<mlx_array> arrays;
+  for (int i = 0; i < count; ++i) arrays.push_back(a(pointers[i]));
+  auto vec = mlx_vector_array_new_data(arrays.data(), arrays.size());
+  int status = mlx_eval(vec);
+  mlx_vector_array_free(vec);
+  return status;
+}
+void* clmlx_zeros(const int* shape, int rank, int dtype) {
+  native_guard guard; auto r = mlx_array_new();
+  int status = mlx_zeros(&r, shape, rank, static_cast<mlx_dtype>(dtype), s());
+  return finish(status, r);
+}
+#define BINARY(name) \
+void* clmlx_##name(void* x, void* y) { \
+  native_guard guard; auto r = mlx_array_new(); \
+  int status = mlx_##name(&r, a(x), a(y), s()); return finish(status, r); }
+BINARY(add)
+BINARY(multiply)
+BINARY(matmul)
+#define UNARY(name) \
+void* clmlx_##name(void* x) { \
+  native_guard guard; auto r = mlx_array_new(); \
+  int status = mlx_##name(&r, a(x), s()); return finish(status, r); }
+UNARY(sigmoid)
+void* clmlx_astype(void* x, int dtype) {
+  native_guard guard; auto r = mlx_array_new();
+  int status = mlx_astype(&r, a(x), static_cast<mlx_dtype>(dtype), s()); return finish(status, r);
+}
+#define SHAPE_OP(name) \
+void* clmlx_##name(void* x, const int* shape, int rank) { \
+  native_guard guard; auto r = mlx_array_new(); \
+  int status = mlx_##name(&r, a(x), shape, rank, s()); return finish(status, r); }
+SHAPE_OP(reshape)
+SHAPE_OP(transpose_axes)
+void* clmlx_slice(void* x, const int* start, const int* stop, const int* strides, int rank) {
+  native_guard guard; auto r = mlx_array_new();
+  int status = mlx_slice(&r, a(x), start, rank, stop, rank, strides, rank, s()); return finish(status, r);
+}
+void* clmlx_slice_update(void* x, void* update, const int* start, const int* stop,
+                        const int* strides, int rank) {
+  native_guard guard; auto r = mlx_array_new();
+  int status = mlx_slice_update(&r, a(x), a(update), start, rank, stop, rank, strides, rank, s());
+  return finish(status, r);
+}
+void* clmlx_take(void* x, void* indices, int axis) {
+  native_guard guard; auto r = mlx_array_new();
+  int status = mlx_take_axis(&r, a(x), a(indices), axis, s()); return finish(status, r);
+}
+void* clmlx_rmsnorm(void* x, void* weight, float epsilon) {
+  native_guard guard; auto r = mlx_array_new();
+  int status = mlx_fast_rms_norm(&r, a(x), a(weight), epsilon, s()); return finish(status, r);
+}
+void* clmlx_rope(void* x, int dims, int traditional, float base, int offset, void* freqs) {
+  native_guard guard; auto r = mlx_array_new();
+  int status = mlx_fast_rope(&r, a(x), dims, traditional, mlx_optional_float{base, freqs == nullptr}, 1.0f, offset, a(freqs), s());
+  return finish(status, r);
+}
+void* clmlx_attention(void* q, void* k, void* v, float scale, const char* mode, void* mask) {
+  native_guard guard; auto r = mlx_array_new();
+  int status = mlx_fast_scaled_dot_product_attention(&r, a(q), a(k), a(v), scale,
+                                                     mode, a(mask), a(nullptr), false, s());
+  return finish(status, r);
+}
+void* clmlx_quantized_matmul(void* x, void* w, void* scales, void* biases, int group_size) {
+  native_guard guard; auto r = mlx_array_new();
+  int status = mlx_quantized_matmul(&r, a(x), a(w), a(scales), a(biases), true,
+                                    oi(group_size), oi(4), "affine", s());
+  return finish(status, r);
+}
+void* clmlx_dequantize(void* w, void* scales, void* biases, int group_size) {
+  native_guard guard; auto r = mlx_array_new();
+  mlx_optional_dtype dtype = {MLX_FLOAT32, true};
+  int status = mlx_dequantize(&r, a(w), a(scales), a(biases), oi(group_size), oi(4),
+                            "affine", a(nullptr), dtype, s());
+  return finish(status, r);
+}
+}

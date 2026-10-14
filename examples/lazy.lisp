@@ -1,0 +1,6 @@
+(asdf:load-system "cl-mlx")
+(cl-mlx:with-array-scope ()
+  (let* ((x (cl-mlx:from-data '(1 2 3 4) '(2 2)))
+         (y (cl-mlx:matmul x (cl-mlx:transpose x))))
+    (cl-mlx:eval y)
+    (print (cl-mlx:to-vector y :evaluate nil))))

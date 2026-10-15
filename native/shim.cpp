@@ -127,7 +127,8 @@ int clmlx_symmetric_quantize(void* x, void** codes_out, void** scales_out) {
 
 void* clmlx_symmetric_dequantize(void* codes, void* scales) {
   native_guard guard;
-  array_owner grouped, scale, floats, decoded, result;
+  array_owner grouped, scale, floats, decoded, bounded, result;
+  array_owner low(-std::numeric_limits<float>::max()), high(std::numeric_limits<float>::max());
   std::vector<int> shape;
   if (q8_group(&grouped.value, a(codes), shape)) return nullptr;
   auto scale_shape = shape;
@@ -136,7 +137,8 @@ void* clmlx_symmetric_dequantize(void* codes, void* scales) {
   if (mlx_reshape(&scale.value, a(scales), scale_shape.data(), scale_shape.size(), s()) ||
       mlx_astype(&floats.value, grouped.value, MLX_FLOAT32, s()) ||
       mlx_multiply(&decoded.value, floats.value, scale.value, s()) ||
-      q8_ungroup(&result.value, decoded.value, shape)) return nullptr;
+      mlx_clip(&bounded.value, decoded.value, low.value, high.value, s()) ||
+      q8_ungroup(&result.value, bounded.value, shape)) return nullptr;
   return result.release();
 }
 const char* clmlx_error() { return last_error; }

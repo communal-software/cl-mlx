@@ -47,7 +47,7 @@ Shapes and slice vectors use axis order, with exclusive slice stops. `from-data`
 ; => #(127.0 -127.0 0.0 2.0)
 ```
 
-Input converts to F32. Each group uses scale `max(abs(group))/127`, signed codes in `[-127,127]` and nearest rounding with ties to even. Zero groups use scale one; other scales have a floor of the smallest normal F32 value. Dequantization returns row-contiguous F32 data. This encoding is separate from affine quantized weights and GGUF Q8_0.
+Input converts to F32. Each group uses scale `max(abs(group))/127`, signed codes in `[-127,127]` and nearest rounding with ties to even. Zero groups use scale one; other scales have a floor of the smallest normal F32 value. Dequantization returns row-contiguous F32 data, saturating reconstruction at finite F32 extrema. This encoding is separate from affine quantized weights and GGUF Q8_0.
 
 Encoding checks finiteness through a device reduction and reads its scalar result, synchronizing that check. The payload stays on the selected device. Graph construction for decoding remains lazy. Both outputs follow the ordinary scope/retain/release rules; an invalid final dimension, non-finite input or mismatched decoder shapes signals `mlx-error`.
 

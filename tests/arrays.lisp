@@ -103,3 +103,12 @@
           (let ((input (mx:from-pointer data '(1) :dtype :f32)))
             (signals mx:mlx-error (mx:symmetric-quantize input))))))
     (is (= before (mx:live-array-count)))))
+
+(test symmetric-q8-reconstructs-finite-extrema
+  (dolist (device '(:cpu :gpu))
+    (mx:with-device (device)
+      (mx:with-array-scope ()
+        (let* ((data (vector most-positive-single-float (- most-positive-single-float)))
+               (input (mx:from-data data '(1 2))))
+          (multiple-value-bind (codes scales) (mx:symmetric-quantize input)
+            (is (equalp data (mx:to-vector (mx:symmetric-dequantize codes scales))))))))))

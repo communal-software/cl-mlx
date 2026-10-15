@@ -26,6 +26,10 @@
 
 (cffi:defcfun ("clmlx_error" %error) :string)
 (cffi:defcfun ("clmlx_live_arrays" %live-arrays) :size)
+(cffi:defcfun ("clmlx_symmetric_quantize" %symmetric-quantize) :int
+  (input :pointer) (codes :pointer) (scales :pointer))
+(cffi:defcfun ("clmlx_symmetric_dequantize" %symmetric-dequantize) :pointer
+  (codes :pointer) (scales :pointer))
 (cffi:defcfun ("clmlx_device" %device) :int)
 (cffi:defcfun ("clmlx_set_device" %set-device) :void (device :int))
 (cffi:defcfun ("clmlx_synchronize" %synchronize) :int)

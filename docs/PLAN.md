@@ -8,6 +8,7 @@
 | Inference array operations and fused blocks | Complete |
 | CPU/GPU scopes, errors and deterministic cleanup | Complete |
 | Native numerical tests and lazy graph example | Complete |
+| Device-side symmetric S8/F32 group-32 encoding and decoding | Complete |
 
 ## Limitations
 

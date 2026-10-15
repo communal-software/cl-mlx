@@ -28,11 +28,28 @@ Graphs retain their input dependencies, so releasing an input handle does not in
 | Arithmetic | `add`, `multiply`, `matmul`, `sigmoid`, `astype` |
 | Fused blocks | `rmsnorm`, `rope`, `attention` |
 | Affine 4-bit weights | `quantized-matmul`, `dequantize` |
+| Symmetric Q8 groups | `symmetric-quantize`, `symmetric-dequantize` |
 | Execution | `eval`, `to-vector`, `with-device`, `device`, `synchronize` |
 
 Shapes and slice vectors use axis order, with exclusive slice stops. `from-data` accepts flat Lisp sequences for F32/F64/S32/U32/U8; `from-pointer` also accepts raw F16/BF16 encodings. Device-specific dtype restrictions are enforced by MLX.
 
 `to-vector` requires row-contiguous F32 data. It evaluates by default; `:evaluate nil` only reads an already evaluated array. Use `astype` to convert another dtype and `eval` to evaluate it.
+
+## Symmetric Q8
+
+`symmetric-quantize` returns two owned arrays: S8 codes with the input shape, and F32 scales with the last dimension replaced by `ceiling(dimension / 32)`. Groups stay within each row of the final axis; partial groups are supported.
+
+```lisp
+(cl-mlx:with-array-scope ()
+  (multiple-value-bind (codes scales)
+      (cl-mlx:symmetric-quantize (cl-mlx:from-data '(127 -127 0.5 1.5) '(1 4)))
+    (cl-mlx:to-vector (cl-mlx:symmetric-dequantize codes scales))))
+; => #(127.0 -127.0 0.0 2.0)
+```
+
+Input converts to F32. Each group uses scale `max(abs(group))/127`, signed codes in `[-127,127]` and nearest rounding with ties to even. Zero groups use scale one; other scales have a floor of the smallest normal F32 value. Dequantization returns row-contiguous F32 data. This encoding is separate from affine quantized weights and GGUF Q8_0.
+
+Encoding checks finiteness through a device reduction and reads its scalar result, synchronizing that check. The payload stays on the selected device. Graph construction for decoding remains lazy. Both outputs follow the ordinary scope/retain/release rules; an invalid final dimension, non-finite input or mismatched decoder shapes signals `mlx-error`.
 
 ## Devices and threads
 

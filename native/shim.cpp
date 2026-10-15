@@ -5,6 +5,7 @@
 #include <cstring>
 #include <mutex>
 #include <vector>
+#include <limits>
 
 static thread_local char last_error[4096];
 static std::atomic<size_t> live_arrays{0};
@@ -54,7 +55,90 @@ static mlx_stream s() {
   return owner.stream;
 }
 
+struct array_owner {
+  mlx_array value;
+  array_owner() : value(mlx_array_new()) {}
+  explicit array_owner(float x) : value(mlx_array_new_float32(x)) {}
+  ~array_owner() { mlx_array_free(value); }
+  void* release() { auto p = value.ctx; value.ctx = nullptr; ++live_arrays; return p; }
+};
+
+static int q8_group(mlx_array* result, mlx_array input, std::vector<int>& shape) {
+  int rank = mlx_array_ndim(input);
+  if (rank < 1 || mlx_array_shape(input)[rank - 1] <= 0) {
+    capture_error("Q8 needs a positive final dimension", nullptr); return -1;
+  }
+  shape.assign(mlx_array_shape(input), mlx_array_shape(input) + rank);
+  int axis = rank - 1, low = 0, high = (32 - shape.back() % 32) % 32;
+  array_owner padded, zero(0.0f);
+  if (mlx_pad(&padded.value, input, &axis, 1, &low, 1, &high, 1,
+              zero.value, "constant", s())) return -1;
+  auto grouped = shape;
+  grouped.back() = (shape.back() + high) / 32;
+  grouped.push_back(32);
+  return mlx_reshape(result, padded.value, grouped.data(), grouped.size(), s());
+}
+
+static int q8_ungroup(mlx_array* result, mlx_array input, const std::vector<int>& shape) {
+  auto padded = shape;
+  padded.back() = ((shape.back() + 31) / 32) * 32;
+  array_owner flat;
+  if (mlx_reshape(&flat.value, input, padded.data(), padded.size(), s())) return -1;
+  std::vector<int> start(shape.size(), 0), strides(shape.size(), 1);
+  array_owner sliced;
+  if (mlx_slice(&sliced.value, flat.value, start.data(), start.size(), shape.data(), shape.size(),
+                 strides.data(), strides.size(), s())) return -1;
+  return mlx_contiguous(result, sliced.value, false, s());
+}
+
 extern "C" {
+int clmlx_symmetric_quantize(void* x, void** codes_out, void** scales_out) {
+  native_guard guard;
+  *codes_out = *scales_out = nullptr;
+  array_owner input, finite, all;
+  bool valid = false;
+  if (mlx_astype(&input.value, a(x), MLX_FLOAT32, s()) ||
+      mlx_isfinite(&finite.value, input.value, s()) ||
+      mlx_all(&all.value, finite.value, false, s()) ||
+      mlx_array_item_bool(&valid, all.value)) return -1;
+  if (!valid) { capture_error("Non-finite Q8 input", nullptr); return -1; }
+  array_owner grouped, magnitude, peak, raw_scale, safe_scale, is_zero, scale;
+  array_owner divisor(127.0f), minimum(std::numeric_limits<float>::min()), one(1.0f), zero(0.0f);
+  array_owner divided, rounded, clipped, codes, flat_codes, scales;
+  array_owner low(-127.0f), high(127.0f);
+  std::vector<int> shape;
+  if (q8_group(&grouped.value, input.value, shape) ||
+      mlx_abs(&magnitude.value, grouped.value, s()) ||
+      mlx_max_axis(&peak.value, magnitude.value, -1, true, s()) ||
+      mlx_divide(&raw_scale.value, peak.value, divisor.value, s()) ||
+      mlx_maximum(&safe_scale.value, raw_scale.value, minimum.value, s()) ||
+      mlx_equal(&is_zero.value, peak.value, zero.value, s()) ||
+      mlx_where(&scale.value, is_zero.value, one.value, safe_scale.value, s()) ||
+      mlx_divide(&divided.value, grouped.value, scale.value, s()) ||
+      mlx_round(&rounded.value, divided.value, 0, s()) ||
+      mlx_clip(&clipped.value, rounded.value, low.value, high.value, s()) ||
+      mlx_astype(&codes.value, clipped.value, MLX_INT8, s()) ||
+      q8_ungroup(&flat_codes.value, codes.value, shape)) return -1;
+  shape.back() = (shape.back() + 31) / 32;
+  if (mlx_reshape(&scales.value, scale.value, shape.data(), shape.size(), s())) return -1;
+  *codes_out = flat_codes.release(); *scales_out = scales.release();
+  return 0;
+}
+
+void* clmlx_symmetric_dequantize(void* codes, void* scales) {
+  native_guard guard;
+  array_owner grouped, scale, floats, decoded, result;
+  std::vector<int> shape;
+  if (q8_group(&grouped.value, a(codes), shape)) return nullptr;
+  auto scale_shape = shape;
+  scale_shape.back() = (shape.back() + 31) / 32;
+  scale_shape.push_back(1);
+  if (mlx_reshape(&scale.value, a(scales), scale_shape.data(), scale_shape.size(), s()) ||
+      mlx_astype(&floats.value, grouped.value, MLX_FLOAT32, s()) ||
+      mlx_multiply(&decoded.value, floats.value, scale.value, s()) ||
+      q8_ungroup(&result.value, decoded.value, shape)) return nullptr;
+  return result.release();
+}
 const char* clmlx_error() { return last_error; }
 size_t clmlx_live_arrays() { return live_arrays.load(); }
 int clmlx_device() { return active_device; }

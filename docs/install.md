@@ -32,4 +32,4 @@ Override these with `CL_MLX_LIBRARY` and `CL_MLX_METALLIB`, or `initialize`'s `:
 sbcl --non-interactive --eval '(require :asdf)' --eval '(asdf:test-system "cl-mlx")'
 ```
 
-Tests execute real CPU/GPU graphs, fused operations, 4-bit matmul, cleanup and native error paths. Loading the Lisp system alone does not load the native library.
+Tests execute real CPU/GPU graphs, fused operations, 4-bit matmul, symmetric Q8 groups, cleanup and native error paths. Loading the Lisp system alone does not load the native library. Rebuild the shim after updating bindings that add native entry points.

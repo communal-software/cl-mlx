@@ -167,3 +167,19 @@
   (wrap (%quantized-matmul (pointer x) (pointer weight) (pointer scales) (pointer biases) group-size)))
 (defun dequantize (weight scales biases group-size)
   (wrap (%dequantize (pointer weight) (pointer scales) (pointer biases) group-size)))
+
+(defun symmetric-quantize (array)
+  "Return signed Q8 codes and F32 scales for groups of 32 on ARRAY's last axis."
+  (cffi:with-foreign-objects ((codes :pointer) (scales :pointer))
+    (check-status (%symmetric-quantize (pointer array) codes scales))
+    (values (wrap (cffi:mem-ref codes :pointer)) (wrap (cffi:mem-ref scales :pointer)))))
+
+(defun symmetric-dequantize (codes scales)
+  "Decode signed Q8 CODES with one F32 scale per last-axis group of 32."
+  (let* ((shape (shape codes)) (expected (copy-list shape)))
+    (unless (and shape (plusp (car (last shape))) (eq (dtype codes) :s8) (eq (dtype scales) :f32))
+      (error 'mlx-error :message "Q8 requires S8 codes, F32 scales and a positive final dimension"))
+    (setf (car (last expected)) (ceiling (car (last shape)) 32))
+    (unless (equal expected (shape scales))
+      (error 'mlx-error :message "Q8 scales do not match the code groups"))
+    (wrap (%symmetric-dequantize (pointer codes) (pointer scales)))))

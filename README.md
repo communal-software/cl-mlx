@@ -2,7 +2,7 @@
 
 Common Lisp bindings to MLX's C API for lazy array computation and inference on macOS Apple Silicon.
 
-[Installation](docs/install.md) · [Arrays and ownership](docs/arrays.md) · [Coverage](docs/PLAN.md)
+[Installation](docs/install.md) · [Arrays and ownership](docs/arrays.md) · [Coverage](docs/PLAN.md) · [Custom kernels](docs/gpu.md)
 
 ```sh
 ./build-native.sh

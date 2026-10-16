@@ -261,4 +261,63 @@ void* clmlx_dequantize(void* w, void* scales, void* biases, int group_size) {
                             "affine", a(nullptr), dtype, s());
   return finish(status, r);
 }
+
+static std::atomic<size_t> live_kernels{0};
+size_t clmlx_live_kernels() { return live_kernels; }
+void* clmlx_kernel_new(const char* name, const char** inputs, int ni,
+                       const char** outputs, int no, const char* source,
+                       const char* header, int atomic) {
+  native_guard guard;
+  auto in = mlx_vector_string_new_data(inputs, ni);
+  auto out = mlx_vector_string_new_data(outputs, no);
+  auto kernel = mlx_fast_metal_kernel_new(name, in, out, source, header, true, atomic != 0);
+  mlx_vector_string_free(in); mlx_vector_string_free(out);
+  if (last_error[0]) { mlx_fast_metal_kernel_free(kernel); return nullptr; }
+  if (kernel.ctx) ++live_kernels;
+  return kernel.ctx;
+}
+void clmlx_kernel_free(void* kernel) {
+  if (kernel) { mlx_fast_metal_kernel_free({kernel}); --live_kernels; }
+}
+int clmlx_kernel_apply(void* kernel, void** inputs, int ni, void** outputs, int no,
+                       const int* dimensions, const int* ranks, const int* dtypes,
+                       const int* grid, const int* group, int initialize, float init,
+                       const char** names, const int* kinds, const int* values, int nt) {
+  native_guard guard;
+  if (active_device != 1) { capture_error("Custom Metal kernels require the GPU device", nullptr); return -1; }
+  auto config = mlx_fast_metal_kernel_config_new();
+  auto in = mlx_vector_array_new();
+  auto out = mlx_vector_array_new();
+  int status = 0, offset = 0;
+  for (int i = 0; i < ni && !status; ++i) status = mlx_vector_array_append_value(in, a(inputs[i]));
+  for (int i = 0; i < no && !status; ++i) {
+    status = mlx_fast_metal_kernel_config_add_output_arg(config, dimensions + offset, ranks[i], mlx_dtype(dtypes[i]));
+    offset += ranks[i];
+  }
+  if (!status) status = mlx_fast_metal_kernel_config_set_grid(config, grid[0], grid[1], grid[2]);
+  if (!status) status = mlx_fast_metal_kernel_config_set_thread_group(config, group[0], group[1], group[2]);
+  if (!status && initialize) status = mlx_fast_metal_kernel_config_set_init_value(config, init);
+  for (int i = 0; i < nt && !status; ++i) {
+    status = kinds[i] == 0
+      ? mlx_fast_metal_kernel_config_add_template_arg_bool(config, names[i], values[i] != 0)
+      : mlx_fast_metal_kernel_config_add_template_arg_int(config, names[i], values[i]);
+  }
+  if (!status) status = mlx_fast_metal_kernel_apply(&out, {kernel}, in, config, s());
+  for (int i = 0; i < no && !status; ++i) {
+    auto result = mlx_array_new();
+    status = mlx_vector_array_get(&result, out, i);
+    outputs[i] = finish(status, result);
+    if (!outputs[i]) status = -1;
+  }
+  mlx_fast_metal_kernel_config_free(config);
+  mlx_vector_array_free(in); mlx_vector_array_free(out);
+  if (status || last_error[0]) {
+    for (int i = 0; i < no; ++i) {
+      if (outputs[i]) { mlx_array_free(a(outputs[i])); --live_arrays; outputs[i] = nullptr; }
+    }
+    return -1;
+  }
+  return 0;
+}
+
 }

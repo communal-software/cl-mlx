@@ -112,3 +112,18 @@
                (input (mx:from-data data '(1 2))))
           (multiple-value-bind (codes scales) (mx:symmetric-quantize input)
             (is (equalp data (mx:to-vector (mx:symmetric-dequantize codes scales))))))))))
+
+(test gelu-tanh-approximation-and-lifetime
+  (let ((before (mx:live-array-count))
+        (values '(-30f0 -5f0 -1f0 0f0 0.5f0 1f0 5f0 30f0)))
+    (mx:with-array-scope ()
+      (let* ((x (mx:from-data values '(2 4)))
+             (y (mx:gelu x)))
+        (is (equal '(2 4) (mx:shape y)))
+        (mx:release x)
+        (loop for value in values for actual across (mx:to-vector y)
+              for v = (coerce value 'double-float)
+              for expected = (* 0.5d0 v (+ 1d0 (tanh (* (sqrt (/ 2d0 pi)) (+ v (* 0.044715d0 v v v))))))
+              do (is (< (abs (- expected actual)) 2d-6)))
+        (signals mx:mlx-error (mx:gelu x))))
+    (is (= before (mx:live-array-count)))))

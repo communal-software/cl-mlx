@@ -183,3 +183,7 @@
     (unless (equal expected (shape scales))
       (error 'mlx-error :message "Q8 scales do not match the code groups"))
     (wrap (%symmetric-dequantize (pointer codes) (pointer scales)))))
+
+(defun gelu (a)
+  "Lazy GELU with the standard tanh approximation."
+  (wrap (%gelu (pointer a))))

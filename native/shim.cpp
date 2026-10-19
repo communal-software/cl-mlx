@@ -209,6 +209,22 @@ void* clmlx_##name(void* x) { \
   native_guard guard; auto r = mlx_array_new(); \
   int status = mlx_##name(&r, a(x), s()); return finish(status, r); }
 UNARY(sigmoid)
+void* clmlx_gelu(void* x) {
+  native_guard guard;
+  array_owner square, cube, cubic, inner, scaled, activated, shifted, half, result;
+  array_owner coefficient(0.044715f), factor(0.7978845608028654f), one(1.0f), scale(0.5f);
+  int status = mlx_multiply(&square.value, a(x), a(x), s());
+  if (!status) status = mlx_multiply(&cube.value, square.value, a(x), s());
+  if (!status) status = mlx_multiply(&cubic.value, cube.value, coefficient.value, s());
+  if (!status) status = mlx_add(&inner.value, a(x), cubic.value, s());
+  if (!status) status = mlx_multiply(&scaled.value, inner.value, factor.value, s());
+  if (!status) status = mlx_tanh(&activated.value, scaled.value, s());
+  if (!status) status = mlx_add(&shifted.value, activated.value, one.value, s());
+  if (!status) status = mlx_multiply(&half.value, a(x), scale.value, s());
+  if (!status) status = mlx_multiply(&result.value, half.value, shifted.value, s());
+  if (status || last_error[0]) return nullptr;
+  return result.release();
+}
 void* clmlx_astype(void* x, int dtype) {
   native_guard guard; auto r = mlx_array_new();
   int status = mlx_astype(&r, a(x), static_cast<mlx_dtype>(dtype), s()); return finish(status, r);

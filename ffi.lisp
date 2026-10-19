@@ -48,6 +48,7 @@
 (cffi:defcfun ("clmlx_multiply" %multiply) :pointer (a :pointer) (b :pointer))
 (cffi:defcfun ("clmlx_matmul" %matmul) :pointer (a :pointer) (b :pointer))
 (cffi:defcfun ("clmlx_sigmoid" %sigmoid) :pointer (a :pointer))
+(cffi:defcfun ("clmlx_gelu" %gelu) :pointer (a :pointer))
 (cffi:defcfun ("clmlx_astype" %astype) :pointer (a :pointer) (dtype :int))
 (cffi:defcfun ("clmlx_reshape" %reshape) :pointer (a :pointer) (shape :pointer) (rank :int))
 (cffi:defcfun ("clmlx_transpose_axes" %transpose) :pointer (a :pointer) (axes :pointer) (rank :int))

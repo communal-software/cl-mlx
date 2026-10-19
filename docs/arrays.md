@@ -25,7 +25,7 @@ Graphs retain their input dependencies, so releasing an input handle does not in
 |---|---|
 | Construction and inspection | `from-data`, `from-pointer`, `zeros`, `shape`, `dtype`, `size` |
 | Shape and indexing | `reshape`, `transpose`, `slice`, `slice-update`, `take` |
-| Arithmetic | `add`, `multiply`, `matmul`, `sigmoid`, `astype` |
+| Arithmetic | `add`, `multiply`, `matmul`, `sigmoid`, `gelu`, `astype` |
 | Fused blocks | `rmsnorm`, `rope`, `attention` |
 | Affine 4-bit weights | `quantized-matmul`, `dequantize` |
 | Symmetric Q8 groups | `symmetric-quantize`, `symmetric-dequantize` |
@@ -34,6 +34,8 @@ Graphs retain their input dependencies, so releasing an input handle does not in
 Shapes and slice vectors use axis order, with exclusive slice stops. `from-data` accepts flat Lisp sequences for F32/F64/S32/U32/U8; `from-pointer` also accepts raw F16/BF16 encodings. Device-specific dtype restrictions are enforced by MLX.
 
 `to-vector` requires row-contiguous F32 data. It evaluates by default; `:evaluate nil` only reads an already evaluated array. Use `astype` to convert another dtype and `eval` to evaluate it.
+
+`gelu` preserves shape and uses the standard tanh approximation: `0.5*x*(1+tanh(sqrt(2/pi)*(x+0.044715*x³)))`. It constructs a lazy native graph and follows ordinary array ownership.
 
 ## Symmetric Q8
 
